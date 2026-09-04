@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "BETA: Learning Dataset Similarity from Preprocessing Behavior for Preprocessing Pipeline Optimization"
+authors:
+  - name: "iSE-UET-VNU"
+url: "https://github.com/iSE-UET-VNU/BETA"
+preferred-citation:
+  type: article
+  title: "Learning Dataset Similarity from Preprocessing Behavior for Preprocessing Pipeline Optimization"
+  authors:
+    - family-names: "Vu"
+      given-names: "Hai-Dang"
+    - family-names: "Tran"
+      given-names: "Minh-Nam"
+    - family-names: "Nguyen"
+      given-names: "Thu-Trang"
+    - family-names: "Nguyen"
+      given-names: "Van-Son"
+    - family-names: "Vo"
+      given-names: "Dinh-Hieu"
+

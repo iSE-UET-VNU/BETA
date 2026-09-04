@@ -1,0 +1,26 @@
+similarity:
+  hidden_dim: 64          # Siamese embedder hidden size
+  embed_dim: 64           # embedding dimension
+  epochs: 100
+  lr: 0.001
+  similarity_target: row_zscore_cosine  # Def. 2 / Eq. 2
+
+transfer:
+  top_k: 1                # K: retrieved similar datasets
+  top_h: 3                # H: transferred pipelines per neighbor
+
+aco:
+  n_ants: 20               # M: number of ants
+  n_iterations: 10
+  alpha: 1.0                # relative weight of pheromone (target-specific evidence)
+  beta: 2.0                 # relative weight of eta (transferred heuristic)
+  evaporation: 0.2       
+  elite_size: 3               # top-K pipelines reinforced per iteration
+
+split:
+  val_ratio: 0.2
+  test_ratio: 0.2
+
+proxy_model: logreg
+downstream_evaluator: proxy  # proxy | autogluon
+seed: 42

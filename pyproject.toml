@@ -1,0 +1,29 @@
+[project]
+name = "beta-preprocessing"
+version = "0.1.0"
+description = "BETA: Learning Dataset Similarity from Preprocessing Behavior for Preprocessing Pipeline Optimization"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24,<2.0",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+autogluon = ["autogluon.tabular>=1.0"]
+openml = ["openml>=0.14"]
+
+[project.scripts]
+beta = "beta.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["beta*"]
