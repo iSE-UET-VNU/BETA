@@ -40,7 +40,8 @@ class SimilarityConfig:
     embed_dim: int = 64
     epochs: int = 100
     lr: float = 1e-3
-    similarity_target: str = "row_zscore_cosine"  
+    similarity_target: str = "row_zscore_cosine"
+    metric_objective: str = "embedding_cosine"  # "embedding_cosine" | "projector_product"  
 
 
 @dataclass

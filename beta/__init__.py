@@ -35,6 +35,8 @@ class BETA:
         self.encoder = encoder
         self.pipeline_configs = pipeline_configs
         self.config = config or BETAConfig()
+        if getattr(self.config, "similarity", None) and getattr(self.config.similarity, "metric_objective", None):
+            self.encoder.metric_objective = self.config.similarity.metric_objective
 
     @classmethod
     def from_pretrained(cls, config: Optional[BETAConfig] = None) -> "BETA":
@@ -89,7 +91,12 @@ class BETA:
         cfg = self.config.transfer
         reference_embeddings = self.encoder.embed(self.library.metafeatures_scaled)
         query_embedding = self.encoder.embed(query_scaled.reshape(1, -1))[0]
-        sims = transfer.dataset_similarities(reference_embeddings, list(self.library.metafeatures.index), query_embedding)
+        sims = transfer.dataset_similarities(
+            reference_embeddings,
+            list(self.library.metafeatures.index),
+            query_embedding,
+            encoder=self.encoder,
+        )
         sims = [(d, s) for d, s in sims if normalize_id(d) != normalize_id(dataset_id)]
         neighbors = transfer.top_k_neighbors(sims, cfg.top_k)
         # Eq. 11 averages over the neighbor's known S(D,P); the imputed matrix fills the (real)

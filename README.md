@@ -80,6 +80,7 @@ similarity:
   epochs: 100
   lr: 0.001
   similarity_target: row_zscore_cosine
+  metric_objective: embedding_cosine     # embedding_cosine (Eq. 7) | projector_product (learned projector)
 
 transfer:
   top_k: 1          # K - behaviorally similar datasets retrieved

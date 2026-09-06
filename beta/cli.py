@@ -58,7 +58,12 @@ def cmd_train_similarity(args: argparse.Namespace) -> None:
     perf = pd.read_csv(args.matrix, index_col=0)
     meta = pd.read_csv(args.metafeatures or DEFAULT_METAFEATURES, index_col=0)
     library = ReferenceLibrary.build(perf, meta)
-    encoder = train_similarity_encoder(library.metafeatures, library.performance_matrix_imputed, seed=args.seed)
+    encoder = train_similarity_encoder(
+        library.metafeatures,
+        library.performance_matrix_imputed,
+        seed=args.seed,
+        metric_objective=getattr(args, "metric_objective", "embedding_cosine"),
+    )
     encoder.save(args.out)
     print(f"saved similarity encoder to {args.out}")
 
@@ -87,6 +92,12 @@ def main() -> None:
     p.add_argument("--metafeatures")
     p.add_argument("--out", default="assets/similarity_encoder.pt")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--metric-objective",
+        choices=["embedding_cosine", "projector_product"],
+        default="embedding_cosine",
+        help="embedding_cosine (Eq. 7, default) | projector_product (learned projector)",
+    )
     p.set_defaults(func=cmd_train_similarity)
 
     args = parser.parse_args()

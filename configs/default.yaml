@@ -3,7 +3,8 @@ similarity:
   embed_dim: 64           # embedding dimension
   epochs: 100
   lr: 0.001
-  similarity_target: row_zscore_cosine  # Def. 2 / Eq. 2
+  similarity_target: row_zscore_cosine 
+  metric_objective: embedding_cosine     # embedding_cosine (default) | projector_product (learned projector)
 
 transfer:
   top_k: 1                # K: retrieved similar datasets

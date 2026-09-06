@@ -1,7 +1,7 @@
 """Phase 2 - Heuristic Transferring: dataset retrieval to per-step priors."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,9 +10,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 EPS = 1e-8
 
 
-def dataset_similarities(reference_embeddings: np.ndarray, dataset_ids: Sequence[str], query_embedding: np.ndarray) -> List[Tuple[str, float]]:
+def dataset_similarities(
+    reference_embeddings: np.ndarray,
+    dataset_ids: Sequence[str],
+    query_embedding: np.ndarray,
+    encoder: Optional[Any] = None,
+) -> List[Tuple[str, float]]:
     """u_i = sim(z_new, z_i) for every reference dataset."""
-    sims = cosine_similarity(reference_embeddings, query_embedding.reshape(1, -1)).ravel()
+    if encoder is not None and hasattr(encoder, "predict_similarity"):
+        sims = encoder.predict_similarity(reference_embeddings, query_embedding)
+    else:
+        sims = cosine_similarity(reference_embeddings, query_embedding.reshape(1, -1)).ravel()
     ranked = sorted(zip(dataset_ids, sims.tolist()), key=lambda item: (-item[1], str(item[0])))
     return [(d, s) for d, s in ranked if np.isfinite(s)]
 

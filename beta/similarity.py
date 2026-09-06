@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,8 @@ class SimilarityEncoder:
     hidden_dim: int
     embed_dim: int
     similarity_target: str
+    projector: Optional[Any] = None
+    metric_objective: str = "embedding_cosine"
 
     def embed(self, metafeatures_scaled: np.ndarray) -> np.ndarray:
         torch = _torch()
@@ -26,13 +28,32 @@ class SimilarityEncoder:
             z = z / (z.norm(dim=1, keepdim=True) + 1e-8)  # Eq. 6
         return z.numpy()
 
+    def predict_similarity(self, reference_embeddings: np.ndarray, query_embedding: np.ndarray) -> np.ndarray:
+        """Compute predicted behavioral similarities between reference embeddings and query embedding."""
+        if self.metric_objective == "projector_product" and self.projector is not None:
+            torch = _torch()
+            with torch.no_grad():
+                t_ref = torch.tensor(reference_embeddings, dtype=torch.float32)
+                t_query = torch.tensor(query_embedding.reshape(1, -1), dtype=torch.float32)
+                inter = t_ref * t_query  # element-wise product of normalized embeddings
+                sims = self.projector(inter).squeeze(-1).numpy()
+            return sims
+        # Default: cosine similarity (dot product of l2-normalized embeddings, Eq. 7)
+        return cosine_similarity(reference_embeddings, query_embedding.reshape(1, -1)).ravel()
+
     def save(self, path: str) -> None:
         torch = _torch()
-        torch.save(
-            {"input_dim": self.input_dim, "hidden_dim": self.hidden_dim, "embed_dim": self.embed_dim,
-             "similarity_target": self.similarity_target, "state_dict": self.embedder.state_dict()},
-            path,
-        )
+        payload = {
+            "input_dim": self.input_dim,
+            "hidden_dim": self.hidden_dim,
+            "embed_dim": self.embed_dim,
+            "similarity_target": self.similarity_target,
+            "metric_objective": self.metric_objective,
+            "state_dict": self.embedder.state_dict(),
+        }
+        if self.projector is not None:
+            payload["projector_state_dict"] = self.projector.state_dict()
+        torch.save(payload, path)
 
     @classmethod
     def load(cls, path: str) -> "SimilarityEncoder":
@@ -41,7 +62,20 @@ class SimilarityEncoder:
         embedder = _build_embedder(payload["input_dim"], payload["hidden_dim"], payload["embed_dim"])
         embedder.load_state_dict(payload["state_dict"])
         embedder.eval()
-        return cls(embedder, payload["input_dim"], payload["hidden_dim"], payload["embed_dim"], payload["similarity_target"])
+        projector = None
+        if "projector_state_dict" in payload:
+            projector = _build_projector(payload["embed_dim"])
+            projector.load_state_dict(payload["projector_state_dict"])
+            projector.eval()
+        return cls(
+            embedder=embedder,
+            input_dim=payload["input_dim"],
+            hidden_dim=payload["hidden_dim"],
+            embed_dim=payload["embed_dim"],
+            similarity_target=payload["similarity_target"],
+            projector=projector,
+            metric_objective=payload.get("metric_objective", "embedding_cosine"),
+        )
 
 
 def _torch():
@@ -55,6 +89,15 @@ def _build_embedder(input_dim: int, hidden_dim: int, embed_dim: int):
     return nn.Sequential(
         nn.Linear(input_dim, hidden_dim), nn.ReLU(),
         nn.Linear(hidden_dim, embed_dim), nn.ReLU(),
+    )
+
+
+def _build_projector(embed_dim: int):
+    torch = _torch()
+    import torch.nn as nn
+    return nn.Sequential(
+        nn.Linear(embed_dim, 1),
+        nn.Tanh(),
     )
 
 
@@ -101,6 +144,7 @@ def train_similarity_encoder(
     lr: float = 1e-3,
     seed: int = 42,
     similarity_target: str = "row_zscore_cosine",
+    metric_objective: str = "embedding_cosine",
 ) -> SimilarityEncoder:
     torch = _torch()
     import torch.optim as optim
@@ -117,7 +161,9 @@ def train_similarity_encoder(
 
     torch.manual_seed(seed)
     embedder = _build_embedder(mf_scaled.shape[1], hidden_dim, embed_dim)
-    optimizer = optim.Adam(embedder.parameters(), lr=lr)
+    projector = _build_projector(embed_dim) if metric_objective == "projector_product" else None
+    params = list(embedder.parameters()) + (list(projector.parameters()) if projector is not None else [])
+    optimizer = optim.Adam(params, lr=lr)
 
     n = mf_scaled.shape[0]
     pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
@@ -129,11 +175,24 @@ def train_similarity_encoder(
         emb_i, emb_j = embedder(X_i), embedder(X_j)
         emb_i = emb_i / (emb_i.norm(dim=1, keepdim=True) + 1e-8)
         emb_j = emb_j / (emb_j.norm(dim=1, keepdim=True) + 1e-8)
-        pred = (emb_i * emb_j).sum(dim=1, keepdim=True)  # Eq. 7
+        if metric_objective == "projector_product":
+            pred = projector(emb_i * emb_j)
+        else:
+            pred = (emb_i * emb_j).sum(dim=1, keepdim=True)  # Eq. 7
         loss = _pearson_loss(pred, y_pairs)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
     embedder.eval()
-    return SimilarityEncoder(embedder, mf_scaled.shape[1], hidden_dim, embed_dim, similarity_target)
+    if projector is not None:
+        projector.eval()
+    return SimilarityEncoder(
+        embedder=embedder,
+        input_dim=mf_scaled.shape[1],
+        hidden_dim=hidden_dim,
+        embed_dim=embed_dim,
+        similarity_target=similarity_target,
+        projector=projector,
+        metric_objective=metric_objective,
+    )
