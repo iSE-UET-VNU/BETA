@@ -86,7 +86,13 @@ def autogluon_score(
     workdir = Path(tempfile.gettempdir()) / f"beta_ag_{uuid.uuid4().hex}"
     ag_metric = "f1_macro" if eval_metric == "f1_macro" else "accuracy"
     try:
-        predictor = TabularPredictor(label=target_column, path=str(workdir), eval_metric=ag_metric, verbosity=0)
+        predictor = TabularPredictor(
+            label=target_column,
+            path=str(workdir),
+            eval_metric=ag_metric,
+            verbosity=0,
+            learner_kwargs={"random_state": 42},
+        )
         predictor.fit(
             train_data=train_df, time_limit=time_limit, presets="best_quality", dynamic_stacking=False,
             feature_generator=IdentityFeatureGenerator(), raise_on_no_models_fitted=False,

@@ -21,7 +21,21 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import functools
+import random
 print = functools.partial(print, flush=True)
+
+
+def set_all_seeds(seed: int = 42) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
 
 # Support running directly or from repository root
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -101,6 +115,7 @@ def evaluate_dataset_configs(
     openml_id = dataset_info["id"]
     print(f"\n{'='*60}\nEvaluating Dataset: {dataset_name} (OpenML ID: {openml_id})\n{'='*60}")
 
+    set_all_seeds(seed)
     results = existing_results or {}
 
     # Load dataset once
@@ -169,6 +184,7 @@ def evaluate_dataset_configs(
 
         print(f"\n--- Running config: {cfg_key} (ants={cfg_params['n_ants']}, update={cfg_params['update_strategy']}) ---")
         t_start = time.time()
+        set_all_seeds(seed)
 
         # Run ACO search
         search_results = aco.search(
@@ -340,6 +356,7 @@ def main():
 
     # Build BETA model
     print(f"Initializing BETA model from pretrained assets...")
+    set_all_seeds(args.seed)
     cfg = BETAConfig()
     cfg.eval_metric = "f1_macro"
     cfg.search_evaluator = "proxy"

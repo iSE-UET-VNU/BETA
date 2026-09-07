@@ -70,7 +70,7 @@ def build_selector(method: str, X: pd.DataFrame, y: pd.Series) -> Optional[Any]:
     elif method == "k_best":
         selector = SelectKBest(f_classif, k=min(20, X.shape[1]))
     else:
-        selector = SelectKBest(lambda Xv, yv: mutual_info_classif(Xv, yv, discrete_features="auto"), k=min(20, X.shape[1]))
+        selector = SelectKBest(lambda Xv, yv: mutual_info_classif(Xv, yv, discrete_features="auto", random_state=42), k=min(20, X.shape[1]))
     selector.fit(X, y.values.ravel())
     return selector
 
@@ -79,4 +79,4 @@ def build_reducer(method: str, X: pd.DataFrame) -> Optional[Any]:
     if method == "none" or X.shape[1] <= 1 or len(X) < 2:
         return None
     n_components = min(10, X.shape[1], len(X) - 1)
-    return PCA(n_components=n_components) if method == "pca" else TruncatedSVD(n_components=n_components)
+    return PCA(n_components=n_components, random_state=42) if method == "pca" else TruncatedSVD(n_components=n_components, random_state=42)
