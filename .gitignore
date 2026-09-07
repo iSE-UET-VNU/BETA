@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# BETA generated bundle artifacts
+experiments/beta_bundle.tar.gz
+experiments/kaggle_unpacker_cell.py

@@ -29,6 +29,7 @@ def search(
     beta: float = 2.0,
     evaporation: float = 0.2,
     elite_size: int = 3,
+    update_strategy: str = "exponential",
     seed: int = 42,
 ) -> List[Tuple[Dict[str, str], float]]:
     """Returns all evaluated (config, score) pairs, best first. evaluate_fn scores S(D,P)."""
@@ -60,7 +61,22 @@ def search(
         ranked = sorted(cache.values(), key=lambda x: x[1], reverse=True)
         elite = ranked[: max(1, elite_size)]
         scores = np.array([s for _, s in elite])
-        reward = (scores - scores.min()) / (scores.max() - scores.min() + EPS) if len(scores) > 1 else np.ones_like(scores)  # Eq. 13 Delta(P)
+
+        # Pheromone update strategy: exponential (default), rank, uniform
+        strategy = (update_strategy or "exponential").lower()
+        if strategy == "uniform":
+            reward = np.ones_like(scores)
+        elif strategy == "rank":
+            k = len(scores)
+            reward = np.array([(k - r) / k for r in range(k)])
+        elif strategy == "exponential":
+            if len(scores) > 1 and (scores.max() - scores.min()) > EPS:
+                norm_scores = (scores - scores.min()) / (scores.max() - scores.min() + EPS)
+                reward = np.exp(norm_scores) / np.e
+            else:
+                reward = np.ones_like(scores)
+        else:  # fallback linear Eq. 13
+            reward = (scores - scores.min()) / (scores.max() - scores.min() + EPS) if len(scores) > 1 else np.ones_like(scores)
 
         for (cfg, _score), delta in zip(elite, reward):
             for step in step_order:

@@ -58,6 +58,7 @@ class ACOConfig:
     beta: float = 2.0
     evaporation: float = 0.2  
     elite_size: int = 3  
+    update_strategy: str = "exponential"  # "exponential" | "rank" | "uniform"
 
 
 @dataclass
@@ -73,8 +74,10 @@ class BETAConfig:
     aco: ACOConfig = field(default_factory=ACOConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     proxy_model: str = "logreg"
+    search_evaluator: str = "proxy"  # "proxy" | "autogluon"
     downstream_evaluator: str = "proxy"  # "proxy" | "autogluon"
-    autogluon_time_limit: int = 60  # seconds per candidate fit; ACO evaluates many candidates
+    eval_metric: str = "accuracy"  # "accuracy" | "f1_macro"
+    autogluon_time_limit: int = 300  # seconds for downstream AutoGluon fit
     seed: int = 42
 
     @classmethod
@@ -90,7 +93,9 @@ class BETAConfig:
         cfg.aco = ACOConfig(**{**asdict(cfg.aco), **raw.get("aco", {})})
         cfg.split = SplitConfig(**{**asdict(cfg.split), **raw.get("split", {})})
         cfg.proxy_model = raw.get("proxy_model", cfg.proxy_model)
+        cfg.search_evaluator = raw.get("search_evaluator", cfg.search_evaluator)
         cfg.downstream_evaluator = raw.get("downstream_evaluator", cfg.downstream_evaluator)
+        cfg.eval_metric = raw.get("eval_metric", cfg.eval_metric)
         cfg.autogluon_time_limit = raw.get("autogluon_time_limit", cfg.autogluon_time_limit)
         cfg.seed = raw.get("seed", cfg.seed)
         return cfg

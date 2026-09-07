@@ -17,11 +17,15 @@ aco:
   beta: 2.0                 # relative weight of eta (transferred heuristic)
   evaporation: 0.2       
   elite_size: 3               # top-K pipelines reinforced per iteration
+  update_strategy: exponential # exponential (default) | rank | uniform
 
 split:
   val_ratio: 0.2
   test_ratio: 0.2
 
 proxy_model: logreg
-downstream_evaluator: proxy  # proxy | autogluon
+search_evaluator: proxy         # proxy (lightweight LR search) | autogluon
+downstream_evaluator: proxy     # proxy | autogluon (final selection & test score)
+eval_metric: accuracy           # accuracy | f1_macro
+autogluon_time_limit: 300       # seconds for downstream AutoGluon fit
 seed: 42

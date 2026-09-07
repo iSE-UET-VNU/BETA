@@ -65,11 +65,16 @@ class BETA:
         X_train, y_train, X_val, y_val, X_test, y_test = split_train_val_test(
             dataset.X, dataset.y, cfg.split.val_ratio, cfg.split.test_ratio, cfg.seed
         )
-        evaluator = evaluate.make_evaluator(cfg.downstream_evaluator, X_train, y_train, X_val, y_val, autogluon_time_limit=cfg.autogluon_time_limit)
+        evaluator = evaluate.make_evaluator(
+            cfg.search_evaluator, X_train, y_train, X_val, y_val,
+            autogluon_time_limit=cfg.autogluon_time_limit,
+            eval_metric=cfg.eval_metric,
+        )
         search_results = aco.search(
             OPERATORS, eta, evaluator,
             n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
-            beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size, seed=cfg.seed,
+            beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
+            update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
         )
         if not search_results:
             raise RuntimeError("ACO search produced no valid pipeline")
@@ -77,9 +82,13 @@ class BETA:
 
         transfer_config = self._best_transferred_pipeline(neighbors)
         chosen, source = evaluate.select_final(
-            search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val, cfg.autogluon_time_limit
+            search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val,
+            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
         )
-        score = evaluate.test_score(chosen, cfg.downstream_evaluator, X_train, y_train, X_test, y_test, cfg.autogluon_time_limit)
+        score = evaluate.test_score(
+            chosen, cfg.downstream_evaluator, X_train, y_train, X_test, y_test,
+            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
+        )
         return Recommendation(pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score, eta={s: v.tolist() for s, v in eta.items()}, neighbors=neighbors)
 
     def _scale_query(self, query_meta: Dict[str, Any]) -> np.ndarray:
