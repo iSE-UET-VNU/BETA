@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -15,8 +16,31 @@ from sklearn.metrics import accuracy_score, f1_score
 from .pipeline import Pipeline
 
 
+class InfrastructureError(RuntimeError):
+    """The machine failed, not the method (process suspended mid-fit, out of memory). Such a run is
+    redone with identical settings instead of being recorded as the method's result."""
+
+
+# AutoGluon stops at a wall-clock time limit. A fit that took far longer than its limit was suspended
+# (laptop asleep, container paused) and stopped early on waking, so its score is not a real result.
+FIT_OVERRUN_FACTOR, FIT_OVERRUN_SLACK = 2.0, 120.0
+
+
+def check_fit_duration(seconds: float, time_limit: float) -> None:
+    if seconds > FIT_OVERRUN_FACTOR * time_limit + FIT_OVERRUN_SLACK:
+        raise InfrastructureError(
+            f"AutoGluon fit took {seconds:.0f} s for a {time_limit:.0f} s limit: the process was suspended"
+        )
+
+
 def detect_problem_type(y: pd.Series) -> str:
     return "regression" if np.issubdtype(y.dtype, np.number) and y.nunique() > 50 else "classification"
+
+
+def classification_problem_type(y) -> str:
+    """AutoGluon problem type for a class label. Passed explicitly so AutoGluon never guesses
+    regression from integer labels with many classes (e.g. abalone's 28 ring counts)."""
+    return "binary" if pd.Series(y).nunique() == 2 else "multiclass"
 
 
 def compute_metric(y_true, y_pred, metric: str = "accuracy") -> float:
@@ -89,18 +113,25 @@ def autogluon_score(
         predictor = TabularPredictor(
             label=target_column,
             path=str(workdir),
+            problem_type=classification_problem_type(y_train_p),
             eval_metric=ag_metric,
             verbosity=0,
             learner_kwargs={"random_state": 42},
         )
+        started = time.time()
         predictor.fit(
             train_data=train_df, time_limit=time_limit, presets="best_quality", dynamic_stacking=False,
             feature_generator=IdentityFeatureGenerator(), raise_on_no_models_fitted=False,
         )
+        check_fit_duration(time.time() - started, time_limit)
         if not predictor.model_names():
             return None
         preds = predictor.predict(eval_df)
         return compute_metric(y_eval.reset_index(drop=True), preds.reset_index(drop=True), eval_metric)
+    except InfrastructureError:
+        raise
+    except MemoryError as err:
+        raise InfrastructureError("out of memory during an AutoGluon fit") from err
     except Exception:
         return None
     finally:
