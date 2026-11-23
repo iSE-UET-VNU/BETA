@@ -18,7 +18,7 @@ EVAL_DATASETS: "dict[str, str]" = {
     "autoUniv-au4": "1548", "ipums-la-99": "378", "madelon": "1485", "mfeat-fourier": "14",
     "colic": "27", "abalone": "44956", "ada_prior": "1037", "avila": "42932",
     "connect-4": "40668", "eeg": "1471", "google": "100000", "house": "42165",
-    "jungle_chess": "41001", "micro": "41671", "mozilla4": "1046", "obesity": "46597",
+    "jungle_chess": "41027", "micro": "41671", "mozilla4": "1046", "obesity": "46597",
     "page-blocks": "30", "pbcseq": "802", "pol": "722", "run_or_walk": "40922",
     "uscensus": "1119", "wall-robot-nav": "1497",
 }
