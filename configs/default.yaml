@@ -17,15 +17,18 @@ aco:
   beta: 2.0                 # relative weight of eta (transferred heuristic)
   evaporation: 0.2       
   elite_size: 3               # top-K pipelines reinforced per iteration
-  update_strategy: exponential # exponential (default) | rank | uniform
+  update_strategy: linear      # linear (paper Eq. 13, default) | exponential | rank | uniform
+  time_budget: null            # seconds for the whole search; null = no limit
 
 split:
   val_ratio: 0.2
   test_ratio: 0.2
+  stratify: true          # false reproduces the unstratified splits of earlier versions
 
 proxy_model: logreg
 search_evaluator: proxy         # proxy (lightweight LR search) | autogluon
 downstream_evaluator: proxy     # proxy | autogluon (final selection & test score)
 eval_metric: accuracy           # accuracy | f1_macro
+query_metafeatures: non_test    # non_test (train + validation rows only) | lookup (full-dataset OpenML table)
 autogluon_time_limit: 300       # seconds for downstream AutoGluon fit
 seed: 42

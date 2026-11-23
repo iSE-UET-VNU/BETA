@@ -5,7 +5,7 @@ import math
 from collections import OrderedDict
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -58,13 +58,15 @@ class ACOConfig:
     beta: float = 2.0
     evaporation: float = 0.2  
     elite_size: int = 3  
-    update_strategy: str = "exponential"  # "exponential" | "rank" | "uniform"
+    update_strategy: str = "linear"  # "linear" (paper Eq. 13) | "exponential" | "rank" | "uniform"
+    time_budget: Optional[float] = None  # seconds for the whole search; None = no limit
 
 
 @dataclass
 class SplitConfig:
     val_ratio: float = 0.2
     test_ratio: float = 0.2
+    stratify: bool = True  # False reproduces the unstratified splits of earlier versions
 
 
 @dataclass
@@ -77,6 +79,7 @@ class BETAConfig:
     search_evaluator: str = "proxy"  # "proxy" | "autogluon"
     downstream_evaluator: str = "proxy"  # "proxy" | "autogluon"
     eval_metric: str = "accuracy"  # "accuracy" | "f1_macro"
+    query_metafeatures: str = "non_test"  # "non_test" (train + validation rows only) | "lookup" (full-dataset table)
     autogluon_time_limit: int = 300  # seconds for downstream AutoGluon fit
     seed: int = 42
 
@@ -96,6 +99,7 @@ class BETAConfig:
         cfg.search_evaluator = raw.get("search_evaluator", cfg.search_evaluator)
         cfg.downstream_evaluator = raw.get("downstream_evaluator", cfg.downstream_evaluator)
         cfg.eval_metric = raw.get("eval_metric", cfg.eval_metric)
+        cfg.query_metafeatures = raw.get("query_metafeatures", cfg.query_metafeatures)
         cfg.autogluon_time_limit = raw.get("autogluon_time_limit", cfg.autogluon_time_limit)
         cfg.seed = raw.get("seed", cfg.seed)
         return cfg

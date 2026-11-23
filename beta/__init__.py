@@ -27,6 +27,9 @@ class Recommendation:
     score: float
     eta: Dict[str, List[float]]
     neighbors: List[tuple]
+    search_evaluations: int = 0
+    search_seconds: float = 0.0
+    search_hit_time_budget: bool = False
 
 
 class BETA:
@@ -57,24 +60,28 @@ class BETA:
         else:
             raise ValueError("pass either openml_id or (X, y)")
 
-        query_meta = metafeatures.lookup_or_compute(normalize_id(dataset.id), self.library.metafeatures_full, dataset.X, dataset.y)
+        X_train, y_train, X_val, y_val, X_test, y_test = split_train_val_test(
+            dataset.X, dataset.y, cfg.split.val_ratio, cfg.split.test_ratio, cfg.seed, stratify=cfg.split.stratify,
+        )
+        query_meta = metafeatures.query_metafeatures(
+            cfg.query_metafeatures, normalize_id(dataset.id), self.library.metafeatures_full,
+            dataset.X, dataset.y, pd.concat([X_train, X_val]), pd.concat([y_train, y_val]), seed=cfg.seed,
+        )
         query_scaled = self._scale_query(query_meta)
 
         neighbors, eta = self._transfer(dataset.id, query_scaled)
-
-        X_train, y_train, X_val, y_val, X_test, y_test = split_train_val_test(
-            dataset.X, dataset.y, cfg.split.val_ratio, cfg.split.test_ratio, cfg.seed
-        )
         evaluator = evaluate.make_evaluator(
             cfg.search_evaluator, X_train, y_train, X_val, y_val,
             autogluon_time_limit=cfg.autogluon_time_limit,
             eval_metric=cfg.eval_metric,
         )
+        search_stats: Dict[str, Any] = {}
         search_results = aco.search(
             OPERATORS, eta, evaluator,
             n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
             beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
             update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
+            time_budget=cfg.aco.time_budget, stats=search_stats,
         )
         if not search_results:
             raise RuntimeError("ACO search produced no valid pipeline")
@@ -89,7 +96,12 @@ class BETA:
             chosen, cfg.downstream_evaluator, X_train, y_train, X_test, y_test,
             cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
         )
-        return Recommendation(pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score, eta={s: v.tolist() for s, v in eta.items()}, neighbors=neighbors)
+        return Recommendation(
+            pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score,
+            eta={s: v.tolist() for s, v in eta.items()}, neighbors=neighbors,
+            search_evaluations=search_stats["evaluations"], search_seconds=search_stats["seconds"],
+            search_hit_time_budget=search_stats["hit_time_budget"],
+        )
 
     def _scale_query(self, query_meta: Dict[str, Any]) -> np.ndarray:
         row = pd.DataFrame([query_meta]).reindex(columns=self.library.metafeatures.columns)
