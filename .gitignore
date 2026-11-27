@@ -220,3 +220,7 @@ __marimo__/
 # BETA generated bundle artifacts
 experiments/beta_bundle.tar.gz
 experiments/kaggle_unpacker_cell.py
+
+# evaluation datasets are rebuilt by experiments/prepare_data.py (hashes in data/manifest.json)
+data/eval/
+results/smoke/
