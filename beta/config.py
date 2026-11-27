@@ -69,12 +69,40 @@ class SplitConfig:
     stratify: bool = True  # False reproduces the unstratified splits of earlier versions
 
 
+ABLATION_CHOICES = {
+    "similarity": ("learned", "metafeature_cosine"),       # Table 5
+    "heuristic": ("transferred", "uniform"),               # Table 6
+    "optimizer": ("aco", "random", "greedy", "sa", "ga", "mcts", "tpe"),  # Table 7
+    "operator_space": ("full", "no_cross_feature"),        # Table 8
+    "mode": ("full", "transfer_only", "search_only"),      # Table 9
+}
+CROSS_FEATURE_STEPS = ("feature_selection", "dimensionality_reduction")
+
+
+@dataclass
+class AblationConfig:
+    """RQ2 variants; the defaults are the complete BETA. Each table changes one field."""
+    similarity: str = "learned"        # metafeature_cosine: cosine on standardised meta-features, no encoder
+    heuristic: str = "transferred"     # uniform: eta = 1 for every operator (Eq. 14 still compares with P_trans)
+    optimizer: str = "aco"             # others search the same space with the same proxy and budget, without eta
+    operator_space: str = "full"       # no_cross_feature: feature_selection and dimensionality_reduction fixed to none
+    mode: str = "full"                 # transfer_only: P_trans, no search; search_only: uniform eta, P_search, no Eq. 14
+
+    def validate(self) -> None:
+        for name, allowed in ABLATION_CHOICES.items():
+            value = getattr(self, name)
+            if value not in allowed:
+                raise ValueError(f"ablation.{name}={value!r}; expected one of {allowed}")
+
+
 @dataclass
 class BETAConfig:
     similarity: SimilarityConfig = field(default_factory=SimilarityConfig)
     transfer: TransferConfig = field(default_factory=TransferConfig)
     aco: ACOConfig = field(default_factory=ACOConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
+    ablation: AblationConfig = field(default_factory=AblationConfig)
+    store_predictions: bool = False  # keep the final model's test predictions (any metric can be computed later)
     proxy_model: str = "logreg"
     search_evaluator: str = "proxy"  # "proxy" | "autogluon"
     downstream_evaluator: str = "proxy"  # "proxy" | "autogluon"
@@ -95,6 +123,8 @@ class BETAConfig:
         cfg.transfer = TransferConfig(**{**asdict(cfg.transfer), **raw.get("transfer", {})})
         cfg.aco = ACOConfig(**{**asdict(cfg.aco), **raw.get("aco", {})})
         cfg.split = SplitConfig(**{**asdict(cfg.split), **raw.get("split", {})})
+        cfg.ablation = AblationConfig(**{**asdict(cfg.ablation), **raw.get("ablation", {})})
+        cfg.store_predictions = raw.get("store_predictions", cfg.store_predictions)
         cfg.proxy_model = raw.get("proxy_model", cfg.proxy_model)
         cfg.search_evaluator = raw.get("search_evaluator", cfg.search_evaluator)
         cfg.downstream_evaluator = raw.get("downstream_evaluator", cfg.downstream_evaluator)

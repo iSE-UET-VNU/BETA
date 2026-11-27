@@ -90,7 +90,10 @@ def autogluon_score(
     target_column: str = "target",
     time_limit: int = 60,
     eval_metric: str = "accuracy",
+    predictions_out: Optional[dict] = None,
 ) -> Optional[float]:
+    """Fit AutoGluon on the preprocessed training data and score X_eval. If `predictions_out` is a dict,
+    it receives y_true and y_pred of the evaluated rows, so any metric can be computed later."""
     from autogluon.tabular import TabularPredictor
     from autogluon.features.generators import IdentityFeatureGenerator
 
@@ -127,6 +130,9 @@ def autogluon_score(
         if not predictor.model_names():
             return None
         preds = predictor.predict(eval_df)
+        if predictions_out is not None:
+            predictions_out["y_true"] = [v.item() if hasattr(v, "item") else v for v in y_eval.reset_index(drop=True)]
+            predictions_out["y_pred"] = [v.item() if hasattr(v, "item") else v for v in preds.reset_index(drop=True)]
         return compute_metric(y_eval.reset_index(drop=True), preds.reset_index(drop=True), eval_metric)
     except InfrastructureError:
         raise
@@ -188,12 +194,16 @@ def test_score(
     X_train, y_train, X_test, y_test,
     autogluon_time_limit: int = 60,
     eval_metric: str = "accuracy",
+    predictions_out: Optional[dict] = None,
 ) -> float:
-    """Held-out test performance of the final chosen pipeline."""
+    """Held-out test performance of the final chosen pipeline (predictions kept if `predictions_out` is given;
+    only the AutoGluon evaluator produces them)."""
     score_fn = proxy_score if evaluator == "proxy" else autogluon_score
     extra: Dict[str, Any] = {"eval_metric": eval_metric}
     if evaluator != "proxy":
         extra["time_limit"] = autogluon_time_limit
+        if predictions_out is not None:
+            extra["predictions_out"] = predictions_out
     score = score_fn(config, X_train, y_train, X_test, y_test, **extra)
     if score is None:
         raise RuntimeError("final pipeline failed to evaluate on the test split")

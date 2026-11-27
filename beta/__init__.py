@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from . import aco, evaluate, metafeatures, transfer
+from . import aco, evaluate, metafeatures, optimizers, transfer
 from .config import (
-    BETAConfig, OPERATORS, DEFAULT_METAFEATURES, DEFAULT_PERFORMANCE_MATRIX,
+    BETAConfig, CROSS_FEATURE_STEPS, OPERATORS, DEFAULT_METAFEATURES, DEFAULT_PERFORMANCE_MATRIX,
     DEFAULT_REFERENCE_PIPELINES, DEFAULT_SIMILARITY_ENCODER,
 )
 from .data import Dataset, load_openml, split_train_val_test
@@ -30,6 +30,19 @@ class Recommendation:
     search_evaluations: int = 0
     search_seconds: float = 0.0
     search_hit_time_budget: bool = False
+    predictions: Optional[Dict[str, list]] = None  # y_true / y_pred of the test split, if requested
+
+
+def search_space(operator_space: str) -> "Dict[str, List[str]]":
+    """Operator options per step; Table 8's variant fixes the cross-feature steps to 'none'."""
+    if operator_space == "no_cross_feature":
+        return {s: (["none"] if s in CROSS_FEATURE_STEPS else list(v)) for s, v in OPERATORS.items()}
+    return {s: list(v) for s, v in OPERATORS.items()}
+
+
+def restrict(config: Dict[str, Any], options: Dict[str, List[str]]) -> Dict[str, Any]:
+    """Map a pipeline into the search space (operators outside it become 'none')."""
+    return {k: (v if k not in options or v in options[k] else "none") for k, v in config.items()}
 
 
 class BETA:
@@ -69,38 +82,57 @@ class BETA:
         )
         query_scaled = self._scale_query(query_meta)
 
+        abl = cfg.ablation
+        abl.validate()
+        options = search_space(abl.operator_space)
         neighbors, eta = self._transfer(dataset.id, query_scaled)
-        evaluator = evaluate.make_evaluator(
-            cfg.search_evaluator, X_train, y_train, X_val, y_val,
-            autogluon_time_limit=cfg.autogluon_time_limit,
-            eval_metric=cfg.eval_metric,
-        )
-        search_stats: Dict[str, Any] = {}
-        search_results = aco.search(
-            OPERATORS, eta, evaluator,
-            n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
-            beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
-            update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
-            time_budget=cfg.aco.time_budget, stats=search_stats,
-        )
-        if not search_results:
-            raise RuntimeError("ACO search produced no valid pipeline")
-        search_config, _ = search_results[0]
+        eta = {s: np.asarray(eta[s])[[OPERATORS[s].index(o) for o in options[s]]] for s in options}
+        if abl.heuristic == "uniform" or abl.mode == "search_only":
+            eta = {s: np.ones(len(v)) for s, v in options.items()}
+        transfer_config = restrict(self._best_transferred_pipeline(neighbors), options)
 
-        transfer_config = self._best_transferred_pipeline(neighbors)
-        chosen, source = evaluate.select_final(
-            search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val,
-            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
-        )
+        search_stats: Dict[str, Any] = {"evaluations": 0, "seconds": 0.0, "hit_time_budget": False}
+        if abl.mode == "transfer_only":
+            chosen, source = transfer_config, "transfer"
+        else:
+            evaluator = evaluate.make_evaluator(
+                cfg.search_evaluator, X_train, y_train, X_val, y_val,
+                autogluon_time_limit=cfg.autogluon_time_limit,
+                eval_metric=cfg.eval_metric,
+            )
+            if abl.optimizer == "aco":
+                search_results = aco.search(
+                    options, eta, evaluator,
+                    n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
+                    beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
+                    update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
+                    time_budget=cfg.aco.time_budget, stats=search_stats,
+                )
+            else:
+                search_results = optimizers.search(
+                    abl.optimizer, options, evaluator, budget=cfg.aco.n_ants * cfg.aco.n_iterations,
+                    seed=cfg.seed, time_budget=cfg.aco.time_budget, stats=search_stats,
+                )
+            if not search_results:
+                raise RuntimeError(f"{abl.optimizer} search produced no valid pipeline")
+            search_config, _ = search_results[0]
+            if abl.mode == "search_only":
+                chosen, source = search_config, "search"
+            else:
+                chosen, source = evaluate.select_final(
+                    search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val,
+                    cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
+                )
+        predictions: Optional[Dict[str, list]] = {} if cfg.store_predictions else None
         score = evaluate.test_score(
             chosen, cfg.downstream_evaluator, X_train, y_train, X_test, y_test,
-            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
+            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric, predictions_out=predictions,
         )
         return Recommendation(
             pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score,
-            eta={s: v.tolist() for s, v in eta.items()}, neighbors=neighbors,
+            eta={s: np.asarray(v).tolist() for s, v in eta.items()}, neighbors=neighbors,
             search_evaluations=search_stats["evaluations"], search_seconds=search_stats["seconds"],
-            search_hit_time_budget=search_stats["hit_time_budget"],
+            search_hit_time_budget=search_stats["hit_time_budget"], predictions=predictions or None,
         )
 
     def _scale_query(self, query_meta: Dict[str, Any]) -> np.ndarray:
@@ -110,14 +142,21 @@ class BETA:
 
     def _transfer(self, dataset_id: str, query_scaled: np.ndarray):
         cfg = self.config.transfer
-        reference_embeddings = self.encoder.embed(self.library.metafeatures_scaled)
-        query_embedding = self.encoder.embed(query_scaled.reshape(1, -1))[0]
-        sims = transfer.dataset_similarities(
-            reference_embeddings,
-            list(self.library.metafeatures.index),
-            query_embedding,
-            encoder=self.encoder,
-        )
+        if self.config.ablation.similarity == "metafeature_cosine":
+            # Table 5: cosine on the standardised meta-features, no learned representation
+            sims = transfer.dataset_similarities(
+                np.asarray(self.library.metafeatures_scaled), list(self.library.metafeatures.index), query_scaled,
+                encoder=None,
+            )
+        else:
+            reference_embeddings = self.encoder.embed(self.library.metafeatures_scaled)
+            query_embedding = self.encoder.embed(query_scaled.reshape(1, -1))[0]
+            sims = transfer.dataset_similarities(
+                reference_embeddings,
+                list(self.library.metafeatures.index),
+                query_embedding,
+                encoder=self.encoder,
+            )
         sims = [(d, s) for d, s in sims if normalize_id(d) != normalize_id(dataset_id)]
         neighbors = transfer.top_k_neighbors(sims, cfg.top_k)
         # Eq. 11 averages over the neighbor's known S(D,P); the imputed matrix fills the (real)
