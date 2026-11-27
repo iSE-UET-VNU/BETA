@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from . import aco, evaluate, metafeatures, transfer
+from . import aco, evaluate, metafeatures, optimizers, transfer
 from .config import (
-    BETAConfig, OPERATORS, DEFAULT_METAFEATURES, DEFAULT_PERFORMANCE_MATRIX,
+    BETAConfig, CROSS_FEATURE_STEPS, OPERATORS, DEFAULT_METAFEATURES, DEFAULT_PERFORMANCE_MATRIX,
     DEFAULT_REFERENCE_PIPELINES, DEFAULT_SIMILARITY_ENCODER,
 )
 from .data import Dataset, load_openml, split_train_val_test
@@ -23,10 +23,38 @@ __all__ = ["BETA", "BETAConfig", "Recommendation"]
 @dataclass
 class Recommendation:
     pipeline: Dict[str, str]
-    source: str  # "search" | "transfer"
+    source: str  # "search" | "transfer" | "transfer_fallback" (the search returned no valid pipeline)
     score: float
     eta: Dict[str, List[float]]
     neighbors: List[tuple]
+    search_evaluations: int = 0
+    search_seconds: float = 0.0
+    search_hit_time_budget: bool = False
+    predictions: Optional[Dict[str, list]] = None  # y_true / y_pred of the test split, if requested
+
+
+def search_space(operator_space: str) -> "Dict[str, List[str]]":
+    """Operator options per step; Table 8's variant fixes the cross-feature steps to 'none'."""
+    if operator_space == "no_cross_feature":
+        return {s: (["none"] if s in CROSS_FEATURE_STEPS else list(v)) for s, v in OPERATORS.items()}
+    return {s: list(v) for s, v in OPERATORS.items()}
+
+
+def restrict(config: Dict[str, Any], options: Dict[str, List[str]]) -> Dict[str, Any]:
+    """Map a pipeline into the search space (operators outside it become 'none')."""
+    return {k: (v if k not in options or v in options[k] else "none") for k, v in config.items()}
+
+
+def runs_on_training_rows(config: Dict[str, Any], X_train, y_train, X_val) -> bool:
+    """True if the pipeline fits on the training rows and transforms the validation rows, keeping >= 1 column."""
+    from .pipeline import Pipeline
+    try:
+        pipe = Pipeline(config)
+        X_tr, y_tr = pipe.fit_transform(X_train, y_train)
+        X_va = pipe.transform(X_val)
+    except Exception:
+        return False
+    return X_tr.shape[1] > 0 and len(X_tr) == len(y_tr) > 0 and X_va.shape[1] == X_tr.shape[1]
 
 
 class BETA:
@@ -57,39 +85,72 @@ class BETA:
         else:
             raise ValueError("pass either openml_id or (X, y)")
 
-        query_meta = metafeatures.lookup_or_compute(normalize_id(dataset.id), self.library.metafeatures_full, dataset.X, dataset.y)
+        X_train, y_train, X_val, y_val, X_test, y_test = split_train_val_test(
+            dataset.X, dataset.y, cfg.split.val_ratio, cfg.split.test_ratio, cfg.seed, stratify=cfg.split.stratify,
+        )
+        query_meta = metafeatures.query_metafeatures(
+            cfg.query_metafeatures, normalize_id(dataset.id), self.library.metafeatures_full,
+            dataset.X, dataset.y, pd.concat([X_train, X_val]), pd.concat([y_train, y_val]), seed=cfg.seed,
+        )
         query_scaled = self._scale_query(query_meta)
 
+        abl = cfg.ablation
+        abl.validate()
+        options = search_space(abl.operator_space)
         neighbors, eta = self._transfer(dataset.id, query_scaled)
+        eta = {s: np.asarray(eta[s])[[OPERATORS[s].index(o) for o in options[s]]] for s in options}
+        if abl.heuristic == "uniform" or abl.mode == "search_only":
+            eta = {s: np.ones(len(v)) for s, v in options.items()}
+        transfer_config = restrict(self._best_transferred_pipeline(neighbors), options)
 
-        X_train, y_train, X_val, y_val, X_test, y_test = split_train_val_test(
-            dataset.X, dataset.y, cfg.split.val_ratio, cfg.split.test_ratio, cfg.seed
-        )
-        evaluator = evaluate.make_evaluator(
-            cfg.search_evaluator, X_train, y_train, X_val, y_val,
-            autogluon_time_limit=cfg.autogluon_time_limit,
-            eval_metric=cfg.eval_metric,
-        )
-        search_results = aco.search(
-            OPERATORS, eta, evaluator,
-            n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
-            beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
-            update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
-        )
-        if not search_results:
-            raise RuntimeError("ACO search produced no valid pipeline")
-        search_config, _ = search_results[0]
-
-        transfer_config = self._best_transferred_pipeline(neighbors)
-        chosen, source = evaluate.select_final(
-            search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val,
-            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
-        )
+        search_stats: Dict[str, Any] = {"evaluations": 0, "seconds": 0.0, "hit_time_budget": False}
+        if abl.mode == "transfer_only":
+            chosen, source = transfer_config, "transfer"
+        else:
+            evaluator = evaluate.make_evaluator(
+                cfg.search_evaluator, X_train, y_train, X_val, y_val,
+                autogluon_time_limit=cfg.autogluon_time_limit,
+                eval_metric=cfg.eval_metric,
+            )
+            if abl.optimizer == "aco":
+                search_results = aco.search(
+                    options, eta, evaluator,
+                    n_ants=cfg.aco.n_ants, n_iterations=cfg.aco.n_iterations, alpha=cfg.aco.alpha,
+                    beta=cfg.aco.beta, evaporation=cfg.aco.evaporation, elite_size=cfg.aco.elite_size,
+                    update_strategy=cfg.aco.update_strategy, seed=cfg.seed,
+                    time_budget=cfg.aco.time_budget, stats=search_stats,
+                )
+            else:
+                search_results = optimizers.search(
+                    abl.optimizer, options, evaluator, budget=cfg.aco.n_ants * cfg.aco.n_iterations,
+                    seed=cfg.seed, time_budget=cfg.aco.time_budget, stats=search_stats,
+                )
+            if not search_results:
+                # Every searched pipeline failed (e.g. all proposals lack an imputer on data with missing values).
+                # Eq. 14 then has no P_search, so P_trans is used: the best transferred pipeline that runs on the
+                # training rows (a pipeline that fails there gets the worst score). Test rows are not used.
+                chosen = self._runnable_transferred_pipeline(neighbors, options, X_train, y_train, X_val)
+                source = "transfer_fallback"
+            else:
+                search_config, _ = search_results[0]
+                if abl.mode == "search_only":
+                    chosen, source = search_config, "search"
+                else:
+                    chosen, source = evaluate.select_final(
+                        search_config, transfer_config, cfg.downstream_evaluator, X_train, y_train, X_val, y_val,
+                        cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
+                    )
+        predictions: Optional[Dict[str, list]] = {} if cfg.store_predictions else None
         score = evaluate.test_score(
             chosen, cfg.downstream_evaluator, X_train, y_train, X_test, y_test,
-            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric,
+            cfg.autogluon_time_limit, eval_metric=cfg.eval_metric, predictions_out=predictions,
         )
-        return Recommendation(pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score, eta={s: v.tolist() for s, v in eta.items()}, neighbors=neighbors)
+        return Recommendation(
+            pipeline={k: v for k, v in chosen.items() if k != "name"}, source=source, score=score,
+            eta={s: np.asarray(v).tolist() for s, v in eta.items()}, neighbors=neighbors,
+            search_evaluations=search_stats["evaluations"], search_seconds=search_stats["seconds"],
+            search_hit_time_budget=search_stats["hit_time_budget"], predictions=predictions or None,
+        )
 
     def _scale_query(self, query_meta: Dict[str, Any]) -> np.ndarray:
         row = pd.DataFrame([query_meta]).reindex(columns=self.library.metafeatures.columns)
@@ -98,14 +159,21 @@ class BETA:
 
     def _transfer(self, dataset_id: str, query_scaled: np.ndarray):
         cfg = self.config.transfer
-        reference_embeddings = self.encoder.embed(self.library.metafeatures_scaled)
-        query_embedding = self.encoder.embed(query_scaled.reshape(1, -1))[0]
-        sims = transfer.dataset_similarities(
-            reference_embeddings,
-            list(self.library.metafeatures.index),
-            query_embedding,
-            encoder=self.encoder,
-        )
+        if self.config.ablation.similarity == "metafeature_cosine":
+            # Table 5: cosine on the standardised meta-features, no learned representation
+            sims = transfer.dataset_similarities(
+                np.asarray(self.library.metafeatures_scaled), list(self.library.metafeatures.index), query_scaled,
+                encoder=None,
+            )
+        else:
+            reference_embeddings = self.encoder.embed(self.library.metafeatures_scaled)
+            query_embedding = self.encoder.embed(query_scaled.reshape(1, -1))[0]
+            sims = transfer.dataset_similarities(
+                reference_embeddings,
+                list(self.library.metafeatures.index),
+                query_embedding,
+                encoder=self.encoder,
+            )
         sims = [(d, s) for d, s in sims if normalize_id(d) != normalize_id(dataset_id)]
         neighbors = transfer.top_k_neighbors(sims, cfg.top_k)
         # Eq. 11 averages over the neighbor's known S(D,P); the imputed matrix fills the (real)
@@ -113,6 +181,22 @@ class BETA:
         top_h = transfer.top_h_pipelines(self.library.performance_matrix_imputed, neighbors, cfg.top_h)
         raw_eta = transfer.aggregate_heuristics(top_h, self.pipeline_configs, OPERATORS)
         return neighbors, transfer.normalize_with_floor(raw_eta)
+
+    def _runnable_transferred_pipeline(self, neighbors, options, X_train, y_train, X_val) -> Dict[str, Any]:
+        """The neighbours' reference pipelines in knowledge-base order (best first, as _best_transferred_pipeline);
+        the first one that runs on the training rows is returned."""
+        cfg_by_name = {c["name"]: c for c in self.pipeline_configs}
+        ranked = []
+        for dataset_id, _sim in neighbors:
+            scores = pd.to_numeric(self.library.performance_matrix[dataset_id], errors="coerce").dropna()
+            if scores.empty:
+                scores = self.library.performance_matrix_imputed[dataset_id]
+            ranked += [(name, float(score)) for name, score in scores.items() if np.isfinite(score)]
+        for name, _score in sorted(ranked, key=lambda item: -item[1]):
+            config = restrict(dict(cfg_by_name[name]), options)
+            if runs_on_training_rows(config, X_train, y_train, X_val):
+                return config
+        raise RuntimeError("search produced no valid pipeline and no transferred pipeline runs on the training rows")
 
     def _best_transferred_pipeline(self, neighbors) -> Dict[str, Any]:
         # Eq. 14's P_trans is one pipeline taken wholesale: prefer an actually-measured score over

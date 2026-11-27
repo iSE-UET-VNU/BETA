@@ -49,6 +49,7 @@ class SimilarityEncoder:
             "embed_dim": self.embed_dim,
             "similarity_target": self.similarity_target,
             "metric_objective": self.metric_objective,
+            "torch_version": str(torch.__version__),  # plain str: torch.load(weights_only=True) rejects TorchVersion
             "state_dict": self.embedder.state_dict(),
         }
         if self.projector is not None:
@@ -171,18 +172,25 @@ def train_similarity_encoder(
     X_j = torch.tensor(np.array([mf_scaled[j] for _, j in pairs]), dtype=torch.float32)
     y_pairs = torch.tensor(np.array([target_sim[i, j] for i, j in pairs]), dtype=torch.float32).unsqueeze(1)
 
-    for _ in range(epochs):
-        emb_i, emb_j = embedder(X_i), embedder(X_j)
-        emb_i = emb_i / (emb_i.norm(dim=1, keepdim=True) + 1e-8)
-        emb_j = emb_j / (emb_j.norm(dim=1, keepdim=True) + 1e-8)
-        if metric_objective == "projector_product":
-            pred = projector(emb_i * emb_j)
-        else:
-            pred = (emb_i * emb_j).sum(dim=1, keepdim=True)  # Eq. 7
-        loss = _pearson_loss(pred, y_pairs)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    # One thread fixes the summation order, so retraining reproduces the weights exactly
+    # (experiments/verify_holdout.py relies on this).
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        for _ in range(epochs):
+            emb_i, emb_j = embedder(X_i), embedder(X_j)
+            emb_i = emb_i / (emb_i.norm(dim=1, keepdim=True) + 1e-8)
+            emb_j = emb_j / (emb_j.norm(dim=1, keepdim=True) + 1e-8)
+            if metric_objective == "projector_product":
+                pred = projector(emb_i * emb_j)
+            else:
+                pred = (emb_i * emb_j).sum(dim=1, keepdim=True)  # Eq. 7
+            loss = _pearson_loss(pred, y_pairs)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+    finally:
+        torch.set_num_threads(threads)
 
     embedder.eval()
     if projector is not None:

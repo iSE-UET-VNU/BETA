@@ -1,0 +1,17 @@
+{
+ "code": "/beta/beta/__init__.py",
+ "pipeline": {
+  "imputation": "median",
+  "scaling": "robust",
+  "encoding": "none",
+  "outlier_removal": "mad",
+  "feature_selection": "k_best",
+  "dimensionality_reduction": "none"
+ },
+ "source": "search",
+ "neighbors": [
+  "743"
+ ],
+ "score": 0.71875,
+ "search_evaluations": 15
+}

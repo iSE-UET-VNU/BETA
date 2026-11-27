@@ -93,10 +93,12 @@ aco:
   beta: 2.0         # heuristic (eta) weight
   evaporation: 0.2
   elite_size: 3
+  update_strategy: linear   # Eq. 13 (default) | exponential | rank | uniform
 
 split:
   val_ratio: 0.2
   test_ratio: 0.2
+  stratify: true    # false reproduces the unstratified splits of earlier versions
 
 proxy_model: logreg
 downstream_evaluator: proxy   # proxy | autogluon
@@ -158,7 +160,52 @@ python3 -m beta.cli recommend --openml <id> --config configs/default.yaml
 ## Evaluation-dataset holdout
 
 The paper's 30 evaluation datasets are removed from the reference library at load time, with an
-assertion that the cleaned library is disjoint from that id set
+assertion that the cleaned library is disjoint from that id set. `experiments/verify_holdout.py`
+retrains the similarity encoder from the held-out library and checks that it reproduces
+`assets/similarity_encoder.pt`.
+
+## Reproducing the experiments
+
+All experiments run in one CPU-only environment (Python 3.11, AutoGluon 1.5.0; exact versions in
+`requirements-lock.txt`):
+
+```bash
+docker build -t beta .
+alias run='docker run --rm -v "$PWD":/beta beta'
+
+run python experiments/prepare_data.py       # 30 datasets of Table 2 -> data/eval/ (hashes in data/manifest.json)
+run python experiments/verify_holdout.py     # encoder was trained with every evaluation dataset held out
+run python experiments/run_rq1.py --datasets 1066 876 --data-dir data/eval --out results/rq1.jsonl
+run python experiments/run_rq1.py --summarize results/rq1.jsonl
+run python -m pytest tests -q
+```
+
+`prepare_data.py` rewrites `data/manifest.json`; `git diff data/manifest.json` shows any file that
+differs from the one used in the paper. `run_rq1.py` writes one line per (dataset, seed, method) and
+resumes where it stopped.
+
+Every table runs through `experiments/run_rq1.py` (one line per dataset, seed and method; `--predictions`
+also stores the test predictions, so accuracy and macro-F1 are both available). Each RQ2/RQ3 variant
+changes one setting with `--set`; everything else stays at the defaults of `configs/default.yaml`:
+
+```bash
+IDS="1066 1047 862 40663 1054 876 18 1520 1548 378 1485 14 27 44956 1037 42932 40668 1471 100000 42165 41027 41671 1046 46597 30 802 722 40922 1119 1497"
+RUN="run python experiments/run_rq1.py --data-dir data/eval --seeds 0 1 2 3 4 --predictions"
+
+$RUN --datasets $IDS --out results/rq1.jsonl                                   # Table 3: BETA and AutoGluon default
+$RUN --datasets <ids> --arms beta --set ablation.similarity=metafeature_cosine --out results/rq2/t5.jsonl   # Table 5
+$RUN --datasets <ids> --arms beta --set ablation.heuristic=uniform --out results/rq2/t6.jsonl             # Table 6
+$RUN --datasets <ids> --arms beta --set ablation.optimizer=random --out results/rq2/t7_random.jsonl       # Table 7: random | greedy | sa | ga | mcts | tpe
+$RUN --datasets <ids> --arms beta --set ablation.operator_space=no_cross_feature --out results/rq2/t8.jsonl  # Table 8
+$RUN --datasets <ids> --arms beta --set ablation.mode=search_only --out results/rq2/t9_search.jsonl       # Table 9: search_only | transfer_only
+$RUN --datasets <ids> --arms beta --metric f1_macro --set transfer.top_k=3 --out results/rq3/k3.jsonl     # Table 10: transfer.top_k = 1 | 3 | 5
+#   Table 11: transfer.top_h = 1..5   Table 12: aco.update_strategy = linear | exponential | rank | uniform   Table 13: aco.n_ants = 5..25
+```
+
+The other optimizers of Table 7 use the same proxy and the same budget (`aco.n_ants` x `aco.n_iterations`
+evaluations); `--set aco.time_budget=<seconds>` caps BETA's search time. `experiments/save_splits.py`
+writes (or checks) the train/validation/test splits of each dataset and seed, so other methods can be run
+on exactly the same rows.
 
 ## Status
 
